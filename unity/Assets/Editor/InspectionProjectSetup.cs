@@ -31,7 +31,7 @@ public static class InspectionProjectSetup
             Cube("Cabinet "+(index+1),new Vector3(x,1.3f,2.8f),new Vector3(1.8f,2.6f,1.1f),cabinet);
             Cube("Door "+(index+1),new Vector3(x,1.3f,2.22f),new Vector3(1.55f,2.3f,.08f),detail);
             for (int slot=0; slot<5; slot++) Cube("Vent",new Vector3(x,1.1f+slot*.22f,2.16f),new Vector3(1.2f,.055f,.035f),cabinet);
-            Sign("CABINET 0"+(index+1),new Vector3(x-.67f,2.35f,2.12f),.11f);
+            Sign("CABINET 0"+(index+1),new Vector3(x,2.33f,2.12f),new Vector2(1.25f,.19f));
         }
         Cube("Pump unit",new Vector3(4.3f,.6f,3.7f),new Vector3(1.6f,1.2f,1.5f),detail);
         var pipeObj = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
@@ -41,7 +41,8 @@ public static class InspectionProjectSetup
         pipeObj.transform.localScale = new Vector3(.25f,5.6f,.25f);
         pipeObj.GetComponent<Renderer>().sharedMaterial = pipe;
         Cube("Walkway",new Vector3(0,.006f,-1.2f),new Vector3(2.1f,.01f,5.5f),Material("Walkway",new Color(.55f,.58f,.32f)));
-        Sign("INSPECTION / EQUIPMENT ROOM",new Vector3(-3.6f,3.7f,5.78f),.17f);
+        Sign("EQUIPMENT ROOM 01",new Vector3(0,3.65f,5.78f),new Vector2(3.2f,.27f),new Color(.09f,.2f,.23f));
+        Sign("PUMP 01",new Vector3(4.3f,1.02f,2.93f),new Vector2(1.1f,.16f));
 
         var sun = new GameObject("Directional Light").AddComponent<Light>();
         sun.type = LightType.Directional; sun.intensity = 1.1f; sun.transform.rotation = Quaternion.Euler(50,-30,0);
@@ -101,10 +102,20 @@ public static class InspectionProjectSetup
         cube.transform.position = position; cube.transform.localScale = scale;
         cube.GetComponent<Renderer>().sharedMaterial = material;
     }
-    static void Sign(string caption,Vector3 position,float scale)
+    static void Sign(string caption,Vector3 position,Vector2 maxSize,Color? color = null)
     {
         var sign = new GameObject(caption).AddComponent<TextMesh>();
-        sign.text = caption; sign.fontSize = 48; sign.characterSize = scale; sign.color = new Color(.85f,.93f,.87f);
+        sign.text = caption; sign.fontSize = 64; sign.characterSize = .1f; sign.color = color ?? new Color(.85f,.93f,.87f);
+        sign.anchor = TextAnchor.MiddleCenter; sign.alignment = TextAlignment.Center;
         sign.transform.position = position;
+        // Bound the *rendered* text, rather than assuming characterSize is the world height.
+        var renderer = sign.GetComponent<MeshRenderer>();
+        Vector3 size = renderer.bounds.size;
+        float factor = Mathf.Min(maxSize.x / Mathf.Max(size.x, .001f), maxSize.y / Mathf.Max(size.y, .001f));
+        sign.transform.localScale = Vector3.one * factor;
+        sign.gameObject.layer = 2;
+        renderer.shadowCastingMode = ShadowCastingMode.Off;
+        renderer.receiveShadows = false;
+        // Labels are decoration: no Collider, and never a target for issue placement.
     }
 }

@@ -199,3 +199,49 @@ func TestCORSAndUnavailableStore(t *testing.T) {
 		t.Fatal(w.Code)
 	}
 }
+
+func TestDetailAndSoftDeleteAcrossRestart(t *testing.T) {
+	s, h, path := setup(t)
+	created := issue(t, request(h, "POST", "/api/issues", valid, "delete-draft"), 201)
+	uri := "/api/issues/" + created.ID
+	detail := issue(t, request(h, "GET", uri, "", ""), 200)
+	if detail != created {
+		t.Fatalf("detail mismatch: %+v", detail)
+	}
+	if w := request(h, "DELETE", uri, "", ""); w.Code != 200 || !strings.Contains(w.Body.String(), `"deleted":true`) {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	s.Close()
+	reopened, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	h = New(reopened, []string{"http://localhost:5173"})
+	for _, method := range []string{"GET", "DELETE"} {
+		if w := request(h, method, uri, "", ""); w.Code != 404 {
+			t.Fatal(method, w.Code, w.Body.String())
+		}
+	}
+	if w := request(h, "PATCH", uri+"/status", `{"status":"resolved"}`, ""); w.Code != 404 {
+		t.Fatal(w.Code)
+	}
+	if w := request(h, "POST", "/api/issues", valid, "delete-draft"); w.Code != 410 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	if w := request(h, "GET", "/api/issues", "", ""); strings.TrimSpace(w.Body.String()) != `{"data":[]}` {
+		t.Fatal(w.Body.String())
+	}
+	// A genuinely new draft remains independent from a deleted submission.
+	if next := issue(t, request(h, "POST", "/api/issues", valid, "new-draft"), 201); next.ID == created.ID {
+		t.Fatal("reused ID")
+	}
+	r := httptest.NewRequest("OPTIONS", uri, nil)
+	r.Header.Set("Origin", "http://localhost:5173")
+	r.Header.Set("Access-Control-Request-Method", "DELETE")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != 204 || !strings.Contains(w.Header().Get("Access-Control-Allow-Methods"), "DELETE") {
+		t.Fatal(w.Code, w.Header())
+	}
+}

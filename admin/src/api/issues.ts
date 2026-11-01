@@ -24,6 +24,18 @@ export async function getIssues(): Promise<Issue[]> {
   return data;
 }
 
+export async function getIssue(id: string): Promise<Issue> {
+  const data = await request(`/api/issues/${encodeURIComponent(id)}`);
+  if (!isIssue(data)) throw new Error('问题详情格式不正确，请刷新重试。');
+  return data;
+}
+
+export async function deleteIssue(id: string): Promise<void> {
+  const data = await request(`/api/issues/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!data || typeof data !== 'object' || !('deleted' in data) || data.deleted !== true || !('id' in data) || data.id !== id)
+    throw new Error('删除响应格式不正确，请刷新确认结果。');
+}
+
 export async function updateStatus(id: string, status: Status): Promise<Issue> {
   const data = await request(`/api/issues/${encodeURIComponent(id)}/status`, {
     method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }),

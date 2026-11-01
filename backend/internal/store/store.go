@@ -23,6 +23,7 @@ var schema string
 
 var ErrNotFound = errors.New("issue not found")
 var ErrConflict = errors.New("idempotency key already used with different content")
+var ErrDeleted = errors.New("issue has been deleted")
 
 type Store struct{ db *sql.DB }
 
@@ -53,6 +54,7 @@ func (s *Store) Ping(ctx context.Context) error {
 }
 
 const columns = "id,title,description,priority,status,position_x,position_y,position_z,created_at,updated_at"
+const active = "NOT EXISTS (SELECT 1 FROM deleted_issues WHERE issue_id=issues.id)"
 
 type scanner interface{ Scan(...any) error }
 
@@ -63,7 +65,7 @@ func scanIssue(row scanner) (model.Issue, error) {
 }
 
 func (s *Store) List(ctx context.Context) ([]model.Issue, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT "+columns+" FROM issues ORDER BY created_at DESC,id DESC")
+	rows, err := s.db.QueryContext(ctx, "SELECT "+columns+" FROM issues WHERE "+active+" ORDER BY created_at DESC,id DESC")
 	if err != nil {
 		return nil, err
 	}
@@ -77,6 +79,31 @@ func (s *Store) List(ctx context.Context) ([]model.Issue, error) {
 		issues = append(issues, i)
 	}
 	return issues, rows.Err()
+}
+
+func (s *Store) Get(ctx context.Context, id string) (model.Issue, error) {
+	i, err := scanIssue(s.db.QueryRowContext(ctx, "SELECT "+columns+" FROM issues WHERE id=? AND "+active, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return i, ErrNotFound
+	}
+	return i, err
+}
+
+func (s *Store) Delete(ctx context.Context, id string) error {
+	// One atomic statement hides the record, while preserving payload and retry history.
+	result, err := s.db.ExecContext(ctx, "INSERT INTO deleted_issues(issue_id,deleted_at) SELECT id,? FROM issues WHERE id=? AND "+active,
+		time.Now().UTC().Format("2006-01-02T15:04:05.000000000Z"), id)
+	if err != nil {
+		return err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (s *Store) Create(ctx context.Context, input model.CreateIssue, key string) (model.Issue, bool, error) {
@@ -96,6 +123,13 @@ func (s *Store) Create(ctx context.Context, input model.CreateIssue, key string)
 		var id, savedHash string
 		err = tx.QueryRowContext(ctx, "SELECT issue_id,request_hash FROM idempotency_keys WHERE key=?", key).Scan(&id, &savedHash)
 		if err == nil {
+			var deleted bool
+			if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM deleted_issues WHERE issue_id=?)", id).Scan(&deleted); err != nil {
+				return empty, false, err
+			}
+			if deleted {
+				return empty, false, ErrDeleted
+			}
 			if fingerprint != savedHash {
 				return empty, false, ErrConflict
 			}
@@ -134,7 +168,7 @@ func (s *Store) UpdateStatus(ctx context.Context, id, status string) (model.Issu
 		return empty, err
 	}
 	defer tx.Rollback()
-	result, err := tx.ExecContext(ctx, "UPDATE issues SET status=?,updated_at=? WHERE id=?", status, time.Now().UTC().Format("2006-01-02T15:04:05.000000000Z"), id)
+	result, err := tx.ExecContext(ctx, "UPDATE issues SET status=?,updated_at=? WHERE id=? AND "+active, status, time.Now().UTC().Format("2006-01-02T15:04:05.000000000Z"), id)
 	if err != nil {
 		return empty, err
 	}

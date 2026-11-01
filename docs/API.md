@@ -1,6 +1,6 @@
 # 接口约定（实施基准）
 
-本文件描述预期接口，运行验证记录见 TEST_PLAN.md。基础地址 `http://localhost:8080`，JSON 使用 UTF-8。Unity 与管理端必须连接同一服务。
+本文件描述已实现接口，运行验证记录见 TEST_PLAN.md。基础地址 `http://localhost:8080`，JSON 使用 UTF-8。Unity 与管理端必须连接同一服务。
 
 ## 数据结构
 
@@ -44,9 +44,25 @@
 
 同一个幂等键及相同创建内容重放返回 `200` 和原问题，不新增记录；相同键搭配不同内容返回 `409`。幂等记录与问题在同一事务持久化，服务重启后仍有效。不带幂等键的普通接口调用也可创建问题，但不保证重复请求去重。
 
+若该幂等键关联的问题已软删除，重试返回 `410`、`ISSUE_DELETED`，不会恢复已删除问题。
+
 ## GET /api/issues
 
 返回 `200`、`{"data":[完整问题对象]}`，按创建时间倒序（相同时间按 ID 排序），空列表为 `{"data":[]}`，不能为 null。
+
+仅返回未删除的问题。React 的关键词、状态、优先级筛选和排序在当前已加载列表上完成，本版不增加分页或搜索查询参数。
+
+## GET /api/issues/{id}
+
+返回 `200`、`{"data":完整问题对象}`，用于 React 详情和 Unity 标记点击。每次打开详情请求最新数据；问题不存在或已软删除返回 `404`。
+
+## DELETE /api/issues/{id}
+
+软删除问题，无需请求体。成功返回 `200`、`{"data":{"id":"问题 ID","deleted":true}}`。不存在或已删除的问题返回 `404`。
+
+数据库保留 issues 和 idempotency_keys 的原记录，通过 deleted_issues 表记录 issue_id 和 deleted_at。已有数据库启动时自动新增该表，不清空旧数据。列表/详情隐藏已删除问题，状态修改返回 404；Unity 成功刷新列表后移除对应标记。删除失败时前端保留记录并提示错误。
+
+本版没有回收站/恢复接口，保留数据便于后续增加恢复功能；不宣称用户当前可直接在页面恢复。
 
 ## PATCH /api/issues/{id}/status
 
@@ -70,4 +86,4 @@
 
 ## 跨域
 
-开发时允许 `http://localhost:5173` 和 `http://127.0.0.1:5173`，来源可配置。处理 OPTIONS 预检，允许 GET、POST、PATCH、OPTIONS 和 Content-Type、Idempotency-Key 请求头。没有 Origin 的桌面 Unity 请求正常处理。
+开发时允许 `http://localhost:5173` 和 `http://127.0.0.1:5173`，来源可配置。处理 OPTIONS 预检，允许 GET、POST、PATCH、DELETE、OPTIONS 和 Content-Type、Idempotency-Key 请求头。没有 Origin 的桌面 Unity 请求正常处理。
