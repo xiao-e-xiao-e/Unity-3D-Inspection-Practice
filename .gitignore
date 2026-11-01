@@ -1,0 +1,39 @@
+# Unity generated files (keep Assets .meta, Packages and ProjectSettings)
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+[Bb]uild/
+[Bb]uilds/
+MemoryCaptures/
+Recordings/
+*.csproj
+*.sln
+*.user
+*.pidb
+*.booproj
+*.svd
+*.pdb
+.vs/
+.idea/
+
+# Frontend
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Local configuration and runtime data
+.env
+.env.local
+.env.*.local
+backend/data/*
+!backend/data/.gitkeep
+*.db
+*.db-shm
+*.db-wal
+*.exe
+coverage/
+*.log
+.DS_Store
+Thumbs.db
