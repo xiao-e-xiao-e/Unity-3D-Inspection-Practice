@@ -53,7 +53,7 @@ func (a *API) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Access-Control-Allow-Origin", origin)
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Idempotency-Key")
 	}
 	if r.Method == http.MethodOptions {
@@ -94,6 +94,27 @@ func (a *API) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.update(w, r, id)
+	case strings.HasPrefix(r.URL.Path, "/api/issues/"):
+		id := strings.TrimPrefix(r.URL.Path, "/api/issues/")
+		if id == "" || strings.Contains(id, "/") {
+			fail(w, 404, "NOT_FOUND", "接口不存在", "")
+			return
+		}
+		switch r.Method {
+		case "GET":
+			i, err := a.store.Get(r.Context(), id)
+			if a.storageError(w, err) {
+				return
+			}
+			success(w, 200, i)
+		case "DELETE":
+			if a.storageError(w, a.store.Delete(r.Context(), id)) {
+				return
+			}
+			success(w, 200, map[string]any{"id": id, "deleted": true})
+		default:
+			method(w, r, "GET", "DELETE")
+		}
 	default:
 		fail(w, 404, "NOT_FOUND", "接口不存在", "")
 	}
@@ -217,7 +238,9 @@ func (a *API) storageError(w http.ResponseWriter, err error) bool {
 	}
 	switch {
 	case errors.Is(err, store.ErrNotFound):
-		fail(w, 404, "NOT_FOUND", "问题不存在", "")
+		fail(w, 404, "NOT_FOUND", "问题不存在或已删除", "")
+	case errors.Is(err, store.ErrDeleted):
+		fail(w, 410, "ISSUE_DELETED", "该次提交的问题已被删除，不能重试恢复", "")
 	case errors.Is(err, store.ErrConflict):
 		fail(w, 409, "IDEMPOTENCY_CONFLICT", "同一个幂等键已用于不同的提交内容", "")
 	default:

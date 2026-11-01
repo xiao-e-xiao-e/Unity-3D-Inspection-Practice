@@ -11,6 +11,9 @@ namespace Inspection
     {
         readonly Font font;
         readonly GameObject overlay;
+        GameObject detailOverlay;
+        Text detailText;
+        ScrollRect detailScroll;
         readonly InputField title, description;
         readonly Dropdown priority;
         readonly Text coordinate, formMessage, notice, submitText;
@@ -21,7 +24,7 @@ namespace Inspection
         public string Description => description.text;
         public string Priority => new[] { "low", "medium", "high" }[priority.value];
 
-        public InspectionUI(Action onSubmit, Action onCancel, Action onRefresh)
+        public InspectionUI(Action onSubmit, Action onCancel, Action onRefresh, Action onCloseDetails)
         {
             font = Font.CreateDynamicFontFromOSFont(new[] { "Microsoft YaHei", "SimHei", "Arial" }, 18);
             if (EventSystem.current == null)
@@ -36,7 +39,7 @@ namespace Inspection
 
             var header = Box(canvas, "Header", 20, 20, 900, 87, new Color(.07f,.16f,.19f,.93f));
             Label(header, "虚拟巡检现场  /  设备间 01", 18, 11, 860, 29, 22, Color.white);
-            Label(header, "WASD 移动  ·  按住右键转向  ·  左键点击设备或表面上报  ·  Esc 取消填写", 18, 49, 860, 23, 15, new Color(.77f,.85f,.79f));
+            Label(header, "WASD 移动 · 右键转向 · 点击表面上报 / 标记查看详情 · Esc 关闭", 18, 49, 860, 23, 15, new Color(.77f,.85f,.79f));
             refresh = Button(canvas, "刷新已保存标记", 1040, 26, 220, 46, onRefresh);
             var noticeBox = Box(canvas, "Notice", 20, 630, 1240, 70, new Color(.97f,.98f,.94f,.96f));
             notice = Label(noticeBox, "", 16, 10, 1208, 50, 17, ink);
@@ -65,7 +68,53 @@ namespace Inspection
             submit = Button(panel, "提交问题", 184, 535, 298, 43, onSubmit);
             submitText = submit.GetComponentInChildren<Text>();
             overlay.SetActive(false);
+            BuildDetailPanel(canvas, onCloseDetails);
         }
+
+        void BuildDetailPanel(Transform canvas, Action onClose)
+        {
+            detailOverlay = new GameObject("Issue details overlay", typeof(RectTransform), typeof(Image));
+            var overlayRect = detailOverlay.GetComponent<RectTransform>();
+            overlayRect.SetParent(canvas, false); Stretch(overlayRect);
+            detailOverlay.GetComponent<Image>().color = new Color(0, 0, 0, .45f);
+            var panel = Box(overlayRect, "Issue details", 0, 0, 590, 590, new Color(.97f, .98f, .95f));
+            panel.anchorMin = panel.anchorMax = panel.pivot = new Vector2(.5f, .5f); panel.anchoredPosition = Vector2.zero;
+            Label(panel, "问题详情", 28, 22, 534, 38, 27, ink);
+            Label(panel, "可滚动查看完整内容 · 关闭后继续巡检", 28, 67, 534, 25, 14, green);
+            var viewport = Box(panel, "Details viewport", 28, 110, 534, 385, Color.white);
+            viewport.gameObject.AddComponent<RectMask2D>();
+            detailText = Label(viewport, "", 12, 8, 510, 365, 17, ink);
+            detailText.alignment = TextAnchor.UpperLeft;
+            detailText.supportRichText = false;
+            detailText.raycastTarget = true;
+            detailText.horizontalOverflow = HorizontalWrapMode.Wrap;
+            detailText.verticalOverflow = VerticalWrapMode.Overflow;
+            detailText.gameObject.AddComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+            detailScroll = viewport.gameObject.AddComponent<ScrollRect>();
+            detailScroll.viewport = viewport; detailScroll.content = detailText.rectTransform;
+            detailScroll.horizontal = false; detailScroll.movementType = ScrollRect.MovementType.Clamped; detailScroll.scrollSensitivity = 24f;
+            Button(panel, "关闭详情", 28, 525, 534, 43, onClose);
+            detailOverlay.SetActive(false);
+        }
+
+        public void OpenDetails(string message)
+        {
+            detailOverlay.SetActive(true); detailText.text = message;
+            refresh.interactable = false;
+            Canvas.ForceUpdateCanvases(); detailScroll.verticalNormalizedPosition = 1f;
+            EventSystem.current.SetSelectedGameObject(null);
+        }
+        public void ShowDetails(Issue issue)
+        {
+            string status = issue.status == "resolved" ? "已解决" : issue.status == "in_progress" ? "处理中" : "待处理";
+            string priorityLabel = issue.priority == "high" ? "高" : issue.priority == "low" ? "低" : "中";
+            OpenDetails("标题\n" + issue.title + "\n\n优先级：" + priorityLabel + "（" + issue.priority + "）   状态：" + status +
+                "\n\n描述\n" + (string.IsNullOrEmpty(issue.description) ? "暂无描述" : issue.description) +
+                $"\n\n位置\nx: {issue.position.x}\ny: {issue.position.y}\nz: {issue.position.z}" +
+                "\n\n创建时间：" + LocalTime(issue.createdAt) + "\n最后更新：" + LocalTime(issue.updatedAt) + "\n\n问题 ID\n" + issue.id + "\n");
+        }
+        static string LocalTime(string value) => DateTimeOffset.TryParse(value, out var time) ? time.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") : value;
+        public void CloseDetails() { detailOverlay.SetActive(false); EventSystem.current.SetSelectedGameObject(null); }
 
         public void Open(Vector3 position)
         {

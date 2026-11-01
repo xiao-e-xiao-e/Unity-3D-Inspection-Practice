@@ -12,6 +12,33 @@ namespace Inspection
         public string baseUrl = "http://localhost:8080";
         public int timeoutSeconds = 10;
 
+        void Awake()
+        {
+            // Optional desktop override for isolated testing or a different backend.
+            foreach (string argument in Environment.GetCommandLineArgs())
+                if (argument.StartsWith("--inspection-api=", StringComparison.Ordinal))
+                {
+                    string url = argument.Substring("--inspection-api=".Length);
+                    if (Uri.TryCreate(url, UriKind.Absolute, out var uri) && (uri.Scheme == "http" || uri.Scheme == "https")) baseUrl = url.TrimEnd('/');
+                    else Debug.LogWarning("Ignored invalid --inspection-api URL.");
+                }
+        }
+
+        public IEnumerator Get(string id, Action<Issue> success, Action<string> failure)
+        {
+            using (var request = UnityWebRequest.Get(baseUrl.TrimEnd('/') + "/api/issues/" + UnityWebRequest.EscapeURL(id)))
+            {
+                request.timeout = timeoutSeconds;
+                yield return request.SendWebRequest();
+                if (request.result != UnityWebRequest.Result.Success) { failure(Error(request)); yield break; }
+                IssueResponse body = null;
+                try { body = JsonUtility.FromJson<IssueResponse>(request.downloadHandler.text); }
+                catch (Exception) { }
+                if (body?.data?.position == null || body.data.id != id) failure("问题详情格式不正确，请刷新重试。");
+                else success(body.data);
+            }
+        }
+
         public IEnumerator List(Action<Issue[]> success, Action<string> failure)
         {
             using (var request = UnityWebRequest.Get(baseUrl.TrimEnd('/') + "/api/issues"))

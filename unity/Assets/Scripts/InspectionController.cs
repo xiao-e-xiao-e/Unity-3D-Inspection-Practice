@@ -12,7 +12,7 @@ namespace Inspection
         public InspectionApi api;
         public LayerMask inspectableLayers = 1 << 8;
         public float maxDistance = 30f;
-        enum Mode { Browsing, Editing, Submitting }
+        enum Mode { Browsing, Editing, Submitting, Viewing }
         Mode mode;
         InspectionUI ui;
         GameObject draftMarker;
@@ -21,6 +21,8 @@ namespace Inspection
         string frozenJson;
         int ignoreClicksThroughFrame;
         bool loading;
+        int detailRequest;
+        const int MarkerLayer = 9;
         readonly Dictionary<string, GameObject> savedMarkers = new Dictionary<string, GameObject>();
         Material draftMaterial, openMaterial, progressMaterial, resolvedMaterial;
         public bool IsEditing => mode != Mode.Browsing;
@@ -33,7 +35,7 @@ namespace Inspection
             openMaterial = MarkerMaterial(new Color(.95f, .28f, .2f));
             progressMaterial = MarkerMaterial(new Color(.2f, .65f, 1f));
             resolvedMaterial = MarkerMaterial(new Color(.2f, .8f, .45f));
-            ui = new InspectionUI(Submit, Cancel, Refresh);
+            ui = new InspectionUI(Submit, Cancel, Refresh, CloseDetails);
             Refresh();
         }
 
@@ -41,9 +43,13 @@ namespace Inspection
         void LateUpdate()
         {
             if (mode == Mode.Editing && Input.GetKeyDown(KeyCode.Escape)) { Cancel(); return; }
-            if (mode != Mode.Browsing || Time.frameCount <= ignoreClicksThroughFrame || !Input.GetMouseButtonDown(0) || Input.GetMouseButton(1)) return;
+            if (mode == Mode.Viewing && Input.GetKeyDown(KeyCode.Escape)) { CloseDetails(); return; }
+            if (mode != Mode.Browsing || loading || Time.frameCount <= ignoreClicksThroughFrame || !Input.GetMouseButtonDown(0) || Input.GetMouseButton(1)) return;
             if (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject()) return;
-            if (!Physics.Raycast(viewCamera.ScreenPointToRay(Input.mousePosition), out RaycastHit hit, maxDistance, inspectableLayers, QueryTriggerInteraction.Ignore)) return;
+            // Nearest hit wins, so markers behind walls cannot be selected through geometry.
+            if (!Physics.Raycast(viewCamera.ScreenPointToRay(Input.mousePosition), out RaycastHit hit, maxDistance, inspectableLayers.value | (1 << MarkerLayer), QueryTriggerInteraction.Collide)) return;
+            var selected = hit.collider.GetComponent<IssueMarker>();
+            if (selected != null) { OpenDetails(selected.issueId); return; }
             hitPosition = hit.point;
             draftMarker = Marker("Pending issue", hit.point + hit.normal * .055f, draftMaterial);
             requestKey = Guid.NewGuid().ToString();
@@ -71,6 +77,7 @@ namespace Inspection
         {
             draftMarker.name = "Issue " + issue.id;
             draftMarker.GetComponent<Renderer>().sharedMaterial = MaterialFor(issue.status);
+            MakeSelectable(draftMarker, issue.id);
             if (savedMarkers.TryGetValue(issue.id, out var existing)) Destroy(existing);
             savedMarkers[issue.id] = draftMarker;
             draftMarker = null;
@@ -104,6 +111,31 @@ namespace Inspection
             ui.SetRefreshEnabled(!loading);
         }
 
+        void OpenDetails(string id)
+        {
+            mode = Mode.Viewing;
+            int request = ++detailRequest;
+            ui.OpenDetails("正在读取问题详情…");
+            StartCoroutine(api.Get(id, issue => {
+                if (mode != Mode.Viewing || request != detailRequest) return;
+                ui.ShowDetails(issue);
+                if (savedMarkers.TryGetValue(id, out var marker)) marker.GetComponent<Renderer>().sharedMaterial = MaterialFor(issue.status);
+            }, message => {
+                if (mode == Mode.Viewing && request == detailRequest)
+                    ui.OpenDetails("无法读取问题详情：\n" + message + "\n\n请关闭后刷新标记，或重新点击重试。");
+            }));
+        }
+
+        void CloseDetails()
+        {
+            if (mode != Mode.Viewing) return;
+            ++detailRequest; // Ignore responses that arrive after closing/reopening a different marker.
+            ui.CloseDetails();
+            mode = Mode.Browsing;
+            ignoreClicksThroughFrame = Time.frameCount + 1;
+            ui.SetRefreshEnabled(!loading);
+        }
+
         void Refresh()
         {
             if (loading || mode != Mode.Browsing) return;
@@ -117,12 +149,23 @@ namespace Inspection
         IEnumerator Load()
         {
             yield return api.List(issues => {
+                var activeIds = new HashSet<string>();
                 foreach (Issue issue in issues)
                 {
                     if (issue == null || string.IsNullOrEmpty(issue.id) || issue.position == null) continue;
+                    activeIds.Add(issue.id);
                     if (savedMarkers.TryGetValue(issue.id, out var marker)) marker.GetComponent<Renderer>().sharedMaterial = MaterialFor(issue.status);
-                    else savedMarkers[issue.id] = Marker("Issue " + issue.id, issue.position.ToVector3(), MaterialFor(issue.status));
+                    else
+                    {
+                        marker = Marker("Issue " + issue.id, issue.position.ToVector3(), MaterialFor(issue.status));
+                        MakeSelectable(marker, issue.id);
+                        savedMarkers[issue.id] = marker;
+                    }
                 }
+                var removedIds = new List<string>();
+                foreach (var pair in savedMarkers)
+                    if (!activeIds.Contains(pair.Key)) { Destroy(pair.Value); removedIds.Add(pair.Key); }
+                foreach (string id in removedIds) savedMarkers.Remove(id);
                 ui.Notice("已同步 " + savedMarkers.Count + " 个问题标记。红：待处理 / 蓝：处理中 / 绿：已解决", false);
             }, message => ui.Notice("读取失败：" + message + "  可点击右上角刷新重试。", true));
             loading = false;
@@ -133,12 +176,21 @@ namespace Inspection
         {
             var sphere = GameObject.CreatePrimitive(PrimitiveType.Sphere);
             sphere.name = name;
-            sphere.layer = 2; // Ignore Raycast; never place a new mark on another mark.
+            sphere.layer = 2; // Pending markers do not intercept scene clicks.
             sphere.transform.position = position;
             sphere.transform.localScale = Vector3.one * .16f;
-            Destroy(sphere.GetComponent<Collider>());
+            sphere.GetComponent<Collider>().enabled = false;
             sphere.GetComponent<Renderer>().sharedMaterial = material;
             return sphere;
+        }
+        static void MakeSelectable(GameObject marker, string id)
+        {
+            marker.layer = MarkerLayer;
+            var collider = marker.GetComponent<Collider>();
+            collider.isTrigger = true; // No physical obstruction to the player.
+            collider.enabled = true;
+            var selectable = marker.GetComponent<IssueMarker>() ?? marker.AddComponent<IssueMarker>();
+            selectable.issueId = id;
         }
         Material MaterialFor(string status) => status == "resolved" ? resolvedMaterial : status == "in_progress" ? progressMaterial : openMaterial;
         static Material MarkerMaterial(Color color) { var material = new Material(Shader.Find("Standard")); material.color = color; return material; }

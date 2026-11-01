@@ -16,3 +16,8 @@ CREATE TABLE IF NOT EXISTS idempotency_keys (
     request_hash TEXT NOT NULL,
     issue_id TEXT NOT NULL REFERENCES issues(id)
 );
+-- Additive migration: keep existing issue records and idempotency keys intact.
+CREATE TABLE IF NOT EXISTS deleted_issues (
+    issue_id TEXT PRIMARY KEY REFERENCES issues(id),
+    deleted_at TEXT NOT NULL
+);
